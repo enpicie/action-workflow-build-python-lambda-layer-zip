@@ -49,6 +49,7 @@ runs:
       run: |
         docker run --rm \
           -v "$PWD":/app -w /app \
+          --user $(id -u):$(id -g) \
           python:${{ inputs.python_runtime }}-slim \
           pip install -r filtered.txt -t layer/python
 
