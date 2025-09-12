@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  uploadLambdaArtifact:
+  uploadLambdaLayerArtifact:
     uses: enpicie/action-workflow-build-python-lambda-layer-zip@v0.1.0
     with:
       requirements_path: ./src/requirements.txt # Path relative the repository root
