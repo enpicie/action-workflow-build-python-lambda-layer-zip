@@ -11,9 +11,10 @@ inputs:
   python_runtime:
     description: 'Python runtime version Layers are built for (e.g., 3.11)'
     required: true
-  s3_bucket_name:
+  s3_layer_bucket_name:
     description: 'Name of the S3 bucket to upload the ZIP file to'
-    required: true
+    required: false
+    default: 'lambda.layer.python3'
   aws_region:
     description: 'AWS region for S3 bucket'
     required: false

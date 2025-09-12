@@ -35,14 +35,14 @@ jobs:
 
 ### Inputs
 
-| Name              | Description                                                     | Required | Example                  |
-| ----------------- | --------------------------------------------------------------- | -------- | ------------------------ |
-| requirements_path | Path to requirements.txt file                                   | Yes      | `./src/requirements.txt` |
-| app_name          | Name of application (used in .zip name)                         | Yes      | `my-app`                 |
-| python_runtime    | Python runtime version Layers are built for (used in .zip name) | Yes      | `3.11`                   |
-| s3_bucket_name    | Name of S3 bucket to upload .zip to                             | Yes      | `dev-artifacts`          |
-| aws_role_arn      | ARN of IAM Role to assume for S3 access                         | Yes      | `secret`                 |
-| aws_region        | AWS region for S3 bucket (defaults us-east-2)                   | No       | `us-east-1`              |
+| Name                 | Description                                                     | Required | Example                  |
+| -------------------- | --------------------------------------------------------------- | -------- | ------------------------ |
+| requirements_path    | Path to requirements.txt file                                   | Yes      | `./src/requirements.txt` |
+| app_name             | Name of application (used in .zip name)                         | Yes      | `my-app`                 |
+| python_runtime       | Python runtime version Layers are built for (used in .zip name) | Yes      | `3.11`                   |
+| s3_layer_bucket_name | Name of S3 bucket to upload .zip for the layer to               | Yes      | `dev-artifacts`          |
+| aws_role_arn         | ARN of IAM Role to assume for S3 access                         | Yes      | `secret`                 |
+| aws_region           | AWS region for S3 bucket (defaults us-east-2)                   | No       | `us-east-1`              |
 
 ---
 
