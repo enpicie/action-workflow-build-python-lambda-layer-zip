@@ -74,7 +74,7 @@ runs:
       shell: bash
       run: |
         s3_key="applayers/${{ env.ZIP_FILE_NAME }}"
-        aws s3 cp "${{ env.ZIP_FILE_NAME }}" "s3://${{ inputs.s3_bucket_name }}/$s3_key"
+        aws s3 cp "${{ env.ZIP_FILE_NAME }}" "s3://${{ inputs.s3_layer_bucket_name }}/$s3_key"
         echo "S3_KEY=$s3_key" >> $GITHUB_ENV
 
     - name: Set outputs
