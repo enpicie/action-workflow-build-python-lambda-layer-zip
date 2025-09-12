@@ -11,9 +11,6 @@ inputs:
   python_runtime:
     description: 'Python runtime version Layers are built for (e.g., 3.11)'
     required: true
-  architecture:
-    description: 'Lambda architecture (x86_64 or arm64)'
-    required: true
   s3_bucket_name:
     description: 'Name of the S3 bucket to upload the ZIP file to'
     required: true
@@ -44,14 +41,13 @@ runs:
       run: |
         rm -rf layer filtered.txt
         mkdir -p layer/python
-        # Filter out pynacl
+        # Filter out architecture-dependent dependencies like pynacl
         grep -v -i "^pynacl" "${{ inputs.requirements_path }}" > filtered.txt
 
-    - name: Install dependencies inside Lambda runtime container
+    - name: Install pure-Python dependencies inside Lambda runtime container
       shell: bash
       run: |
         docker run --rm \
-          --platform linux/${{ inputs.architecture }} \
           -v "$PWD":/app -w /app \
           public.ecr.aws/lambda/python:${{ inputs.python_runtime }} \
           pip install -r filtered.txt -t layer/python
@@ -61,7 +57,7 @@ runs:
       shell: bash
       run: |
         runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
-        zip_file="${{ inputs.app_name }}-${runtime_sanitized}-${{ inputs.architecture }}.zip"
+        zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
         cd layer && zip -r "../$zip_file" python && cd ..
         echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
 
