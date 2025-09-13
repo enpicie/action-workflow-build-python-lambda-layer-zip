@@ -26,10 +26,10 @@ inputs:
 outputs:
   zip_file_name:
     description: 'Final ZIP file name including .zip extension'
-    value: ${{ steps.set-outputs.outputs.zip_file_name }}
+    value: ${{ steps.set-zip-and-s3.outputs.zip_file_name }}
   s3_artifact_key:
     description: 'Full S3 key for the uploaded ZIP artifact'
-    value: ${{ steps.set-outputs.outputs.s3_artifact_key }}
+    value: ${{ steps.set-zip-and-s3.outputs.s3_artifact_key }}
 
 runs:
   using: 'composite'
@@ -37,34 +37,29 @@ runs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set outputs for ZIP file name and S3 key
-      id: set-zip-and-s3
-      shell: bash
-      run: |
-        # Generate ZIP file name
-        runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
-        zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
-        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
-
-        # Generate S3 key from ZIP file name
-        s3_key="applayers/$zip_file"
-        echo "S3_KEY=$s3_key" >> $GITHUB_ENV
-
-        echo "zip_file_name=${{ env.ZIP_FILE_NAME }}" >> $GITHUB_OUTPUT
-        echo "s3_artifact_key=${{ env.S3_KEY }}" >> $GITHUB_OUTPUT
-
     - name: Check if requirements.txt changed
       id: check-requirements
       run: |
-        CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep '^requirements.txt' || true)
-        if [ -n "$CHANGED" ]; then
+        if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q '^requirements.txt'; then
           echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
         else
           echo "REQUIREMENTS_CHANGED=false" >> $GITHUB_ENV
         fi
 
-    # Remaining steps only run if requirements.txt changed
+    - name: Generate ZIP file name and S3 key
+      id: set-zip-and-s3
+      shell: bash
+      run: |
+        runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
+        zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
+        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
+        echo "zip_file_name=$zip_file" >> $GITHUB_OUTPUT
 
+        s3_key="applayers/$zip_file"
+        echo "S3_KEY=$s3_key" >> $GITHUB_ENV
+        echo "s3_artifact_key=$s3_key" >> $GITHUB_OUTPUT
+
+    # Remaining steps only run if requirements.txt changed
     - name: Prepare build directory
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
@@ -86,13 +81,9 @@ runs:
 
     - name: Zip dependencies
       if: env.REQUIREMENTS_CHANGED == 'true'
-      id: zip
       shell: bash
       run: |
-        runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
-        zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
-        cd layer && zip -r "../$zip_file" python && cd ..
-        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
+        cd layer && zip -r "../$ZIP_FILE_NAME" python && cd ..
 
     - name: Configure AWS credentials (OIDC + role assumption)
       if: env.REQUIREMENTS_CHANGED == 'true'
@@ -103,9 +94,6 @@ runs:
 
     - name: Upload to S3
       if: env.REQUIREMENTS_CHANGED == 'true'
-      id: upload
       shell: bash
       run: |
-        s3_key="applayers/${{ env.ZIP_FILE_NAME }}"
-        aws s3 cp "${{ env.ZIP_FILE_NAME }}" "s3://${{ inputs.s3_layer_bucket_name }}/$s3_key"
-        echo "S3_KEY=$s3_key" >> $GITHUB_ENV
+        aws s3 cp "$ZIP_FILE_NAME" "s3://${{ inputs.s3_layer_bucket_name }}/$S3_KEY"
