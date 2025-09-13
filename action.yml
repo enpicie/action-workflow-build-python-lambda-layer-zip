@@ -39,6 +39,7 @@ runs:
 
     - name: Check if requirements.txt changed
       id: check-requirements
+      shell: bash
       run: |
         if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q '^requirements.txt'; then
           echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
