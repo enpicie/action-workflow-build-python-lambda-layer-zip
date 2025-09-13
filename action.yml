@@ -37,7 +37,36 @@ runs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Set outputs for ZIP file name and S3 key
+      id: set-zip-and-s3
+      shell: bash
+      run: |
+        # Generate ZIP file name
+        runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
+        zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
+        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
+
+        # Generate S3 key from ZIP file name
+        s3_key="applayers/$zip_file"
+        echo "S3_KEY=$s3_key" >> $GITHUB_ENV
+
+        echo "zip_file_name=${{ env.ZIP_FILE_NAME }}" >> $GITHUB_OUTPUT
+        echo "s3_artifact_key=${{ env.S3_KEY }}" >> $GITHUB_OUTPUT
+
+    - name: Check if requirements.txt changed
+      id: check-requirements
+      run: |
+        CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep '^requirements.txt' || true)
+        if [ -n "$CHANGED" ]; then
+          echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
+        else
+          echo "REQUIREMENTS_CHANGED=false" >> $GITHUB_ENV
+        fi
+
+    # Remaining steps only run if requirements.txt changed
+
     - name: Prepare build directory
+      if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
         rm -rf layer filtered.txt
@@ -46,6 +75,7 @@ runs:
         grep -v -i "^pynacl" "${{ inputs.requirements_path }}" > filtered.txt
 
     - name: Install pure-Python dependencies inside Lambda runtime container
+      if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
         docker run --rm \
@@ -55,6 +85,7 @@ runs:
           pip install -r filtered.txt -t layer/python
 
     - name: Zip dependencies
+      if: env.REQUIREMENTS_CHANGED == 'true'
       id: zip
       shell: bash
       run: |
@@ -64,22 +95,17 @@ runs:
         echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
 
     - name: Configure AWS credentials (OIDC + role assumption)
+      if: env.REQUIREMENTS_CHANGED == 'true'
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ inputs.aws_role_arn }}
         aws-region: ${{ inputs.aws_region }}
 
     - name: Upload to S3
+      if: env.REQUIREMENTS_CHANGED == 'true'
       id: upload
       shell: bash
       run: |
         s3_key="applayers/${{ env.ZIP_FILE_NAME }}"
         aws s3 cp "${{ env.ZIP_FILE_NAME }}" "s3://${{ inputs.s3_layer_bucket_name }}/$s3_key"
         echo "S3_KEY=$s3_key" >> $GITHUB_ENV
-
-    - name: Set outputs
-      id: set-outputs
-      shell: bash
-      run: |
-        echo "zip_file_name=${{ env.ZIP_FILE_NAME }}" >> $GITHUB_OUTPUT
-        echo "s3_artifact_key=${{ env.S3_KEY }}" >> $GITHUB_OUTPUT
