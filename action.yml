@@ -1,5 +1,5 @@
 name: 'Build Lambda Layer Zip and Upload to S3'
-description: 'Installs dependencies from requirements.txt, zips for Lambda Layer, and uploads to S3.'
+description: 'Installs dependencies from requirements.txt, zips for Lambda Layer, and uploads to S3 if requirements changed.'
 
 inputs:
   requirements_path:
@@ -37,15 +37,11 @@ runs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Check if requirements.txt changed
-      id: check-requirements
-      shell: bash
-      run: |
-        if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q '^requirements.txt'; then
-          echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
-        else
-          echo "REQUIREMENTS_CHANGED=false" >> $GITHUB_ENV
-        fi
+    - name: Configure AWS credentials (OIDC + role assumption)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws_role_arn }}
+        aws-region: ${{ inputs.aws_region }}
 
     - name: Generate ZIP file name and S3 key
       id: set-zip-and-s3
@@ -53,24 +49,57 @@ runs:
       run: |
         runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
         zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
+        s3_prefix="applayers/${{ inputs.app_name }}-${runtime_sanitized}"
+        s3_key="${s3_prefix}.zip"
+
         echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
-        echo "zip_file_name=$zip_file" >> $GITHUB_OUTPUT
-
-        s3_key="applayers/$zip_file"
+        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_OUTPUT
         echo "S3_KEY=$s3_key" >> $GITHUB_ENV
-        echo "s3_artifact_key=$s3_key" >> $GITHUB_OUTPUT
+        echo "S3_KEY=$s3_key" >> $GITHUB_OUTPUT
+        echo "S3_PREFIX=$s3_prefix" >> $GITHUB_ENV
 
-    # Remaining steps only run if requirements.txt changed
+    - name: Compute current requirements hash
+      id: compute-hash
+      shell: bash
+      run: |
+        current_hash=$(sha256sum "${{ inputs.requirements_path }}" | cut -d ' ' -f1)
+        echo "CURRENT_HASH=$current_hash" >> $GITHUB_ENV
+
+    - name: Fetch previous hash from S3 (if any)
+      id: fetch-prev-hash
+      continue-on-error: true
+      shell: bash
+      run: |
+        aws s3 cp "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash" prev.hash || echo "no previous hash"
+        if [ -f prev.hash ]; then
+          echo "PREV_HASH=$(cat prev.hash)" >> $GITHUB_ENV
+        else
+          echo "PREV_HASH=none" >> $GITHUB_ENV
+        fi
+
+    - name: Determine if rebuild is needed
+      id: check-hash
+      shell: bash
+      run: |
+        if [ "$CURRENT_HASH" != "$PREV_HASH" ]; then
+          echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
+        else
+          echo "REQUIREMENTS_CHANGED=false" >> $GITHUB_ENV
+        fi
+        echo "Previous hash: $PREV_HASH"
+        echo "Current hash:  $CURRENT_HASH"
+        echo "Requirements changed: $REQUIREMENTS_CHANGED"
+
+    # Only run build if requirements changed
     - name: Prepare build directory
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
         rm -rf layer filtered.txt
         mkdir -p layer/python
-        # Filter out architecture-dependent dependencies like pynacl
         grep -v -i "^pynacl" "${{ inputs.requirements_path }}" > filtered.txt
 
-    - name: Install pure-Python dependencies inside Lambda runtime container
+    - name: Install dependencies in Docker
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
@@ -86,15 +115,9 @@ runs:
       run: |
         cd layer && zip -r "../$ZIP_FILE_NAME" python && cd ..
 
-    - name: Configure AWS credentials (OIDC + role assumption)
-      if: env.REQUIREMENTS_CHANGED == 'true'
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ inputs.aws_role_arn }}
-        aws-region: ${{ inputs.aws_region }}
-
-    - name: Upload to S3
+    - name: Upload ZIP and hash to S3
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
         aws s3 cp "$ZIP_FILE_NAME" "s3://${{ inputs.s3_layer_bucket_name }}/$S3_KEY"
+        echo "$CURRENT_HASH" | aws s3 cp - "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash"
