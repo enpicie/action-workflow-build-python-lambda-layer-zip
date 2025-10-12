@@ -142,7 +142,7 @@ runs:
         cd layer && zip -r "../$ZIP_FILE_NAME" python && cd ..
         echo "✅ Created ZIP: $(du -h "$ZIP_FILE_NAME")"
 
-    - name: Upload ZIP and hash to S3
+        - name: Upload ZIP and hash to S3
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
@@ -152,9 +152,15 @@ runs:
           exit 1
         fi
 
-        aws s3 cp "$ZIP_FILE_NAME" "s3://${{ inputs.s3_layer_bucket_name }}/$S3_KEY" --no-progress && echo "✅ ZIP uploaded successfully" || (echo "❌ ZIP upload failed" && exit 1)
+        ZIP_S3_URI="s3://${{ inputs.s3_layer_bucket_name }}/$S3_KEY"
+        aws s3 cp "$ZIP_FILE_NAME" "$ZIP_S3_URI" --no-progress \
+          && echo "✅ ZIP uploaded successfully to $ZIP_S3_URI" \
+          || (echo "❌ ZIP upload failed to $ZIP_S3_URI" && exit 1)
 
-        echo "🔹 Uploading hash to S3..."
-        echo "$CURRENT_HASH" | aws s3 cp - "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash" --no-progress && echo "✅ Hash uploaded successfully" || (echo "❌ Hash upload failed" && exit 1)
+        echo "🔹 Uploading requirements hash to S3..."
+        HASH_S3_URI="s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash"
+        echo "$CURRENT_HASH" | aws s3 cp - "$HASH_S3_URI" --no-progress \
+          && echo "✅ Hash uploaded successfully to $HASH_S3_URI" \
+          || (echo "❌ Hash upload failed to $HASH_S3_URI" && exit 1)
 
         echo "🔹 Upload complete."
