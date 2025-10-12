@@ -49,18 +49,33 @@ runs:
       run: |
         runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
         zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
-        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
-        echo "zip_file_name=$zip_file" >> $GITHUB_OUTPUT
+        s3_prefix="applayers/${{ inputs.app_name }}-${runtime_sanitized}"
+        s3_key="${s3_prefix}.zip"
 
-        s3_key="applayers/$zip_file"
+        echo "🔹 Python runtime: ${{ inputs.python_runtime }}"
+        echo "🔹 Sanitized runtime: $runtime_sanitized"
+        echo "🔹 Generated ZIP: $zip_file"
+        echo "🔹 S3 prefix: $s3_prefix"
+        echo "🔹 S3 key: $s3_key"
+
+        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
+        echo "S3_PREFIX=$s3_prefix" >> $GITHUB_ENV
         echo "S3_KEY=$s3_key" >> $GITHUB_ENV
+
+        echo "zip_file_name=$zip_file" >> $GITHUB_OUTPUT
         echo "s3_artifact_key=$s3_key" >> $GITHUB_OUTPUT
 
     - name: Compute current requirements hash
       id: compute-hash
       shell: bash
       run: |
+        echo "🔹 Computing hash for: ${{ inputs.requirements_path }}"
+        if [ ! -f "${{ inputs.requirements_path }}" ]; then
+          echo "❌ Error: requirements.txt not found at path '${{ inputs.requirements_path }}'"
+          exit 1
+        fi
         current_hash=$(sha256sum "${{ inputs.requirements_path }}" | cut -d ' ' -f1)
+        echo "🔹 Current hash: $current_hash"
         echo "CURRENT_HASH=$current_hash" >> $GITHUB_ENV
 
     - name: Fetch previous hash from S3 (if any)
@@ -68,54 +83,78 @@ runs:
       continue-on-error: true
       shell: bash
       run: |
-        aws s3 cp "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash" prev.hash || echo "no previous hash"
+        echo "🔹 Checking for previous hash at s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash"
+        aws s3 cp "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash" prev.hash && echo "✅ Previous hash downloaded" || echo "⚠️ No previous hash found (first run or missing file)"
         if [ -f prev.hash ]; then
           echo "PREV_HASH=$(cat prev.hash)" >> $GITHUB_ENV
+          echo "🔹 Previous hash: $(cat prev.hash)"
         else
           echo "PREV_HASH=none" >> $GITHUB_ENV
+          echo "🔹 Setting PREV_HASH=none"
         fi
 
     - name: Determine if rebuild is needed
       id: check-hash
       shell: bash
       run: |
-        if [ "$CURRENT_HASH" != "$PREV_HASH" ]; then
-          echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
-        else
-          echo "REQUIREMENTS_CHANGED=false" >> $GITHUB_ENV
-        fi
+        echo "🔹 Comparing hashes..."
         echo "Previous hash: $PREV_HASH"
         echo "Current hash:  $CURRENT_HASH"
-        echo "Requirements changed: $REQUIREMENTS_CHANGED"
 
-    # Only run build if requirements changed
+        if [ "$CURRENT_HASH" != "$PREV_HASH" ]; then
+          echo "✅ Requirements changed — will rebuild layer."
+          echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
+        else
+          echo "🟡 Requirements unchanged — skipping rebuild."
+          echo "REQUIREMENTS_CHANGED=false" >> $GITHUB_ENV
+        fi
+
     - name: Prepare build directory
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
+        echo "🔹 Preparing build directory..."
         rm -rf layer filtered.txt
         mkdir -p layer/python
+        echo "🔹 Filtering out architecture-dependent dependencies..."
         grep -v -i "^pynacl" "${{ inputs.requirements_path }}" > filtered.txt
+        echo "🔹 Filtered requirements:"
+        cat filtered.txt
 
     - name: Install dependencies in Docker
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
+        echo "🔹 Installing dependencies using Python ${{ inputs.python_runtime }}..."
         docker run --rm \
           -v "$PWD":/app -w /app \
           --user $(id -u):$(id -g) \
           python:${{ inputs.python_runtime }}-slim \
-          pip install -r filtered.txt -t layer/python
+          bash -c "pip install -r filtered.txt -t layer/python && echo '✅ pip install completed successfully'"
+        echo "🔹 Installed dependencies:"
+        ls -1 layer/python | head -20 || echo "⚠️ No packages found in layer/python"
 
     - name: Zip dependencies
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
+        echo "🔹 Zipping dependencies into $ZIP_FILE_NAME..."
         cd layer && zip -r "../$ZIP_FILE_NAME" python && cd ..
+        echo "✅ Created ZIP: $(du -h "$ZIP_FILE_NAME")"
 
     - name: Upload ZIP and hash to S3
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
-        aws s3 cp "$ZIP_FILE_NAME" "s3://${{ inputs.s3_layer_bucket_name }}/$S3_KEY"
-        echo "$CURRENT_HASH" | aws s3 cp - "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash"
+        echo "🔹 Uploading layer ZIP to S3..."
+        if [ ! -f "$ZIP_FILE_NAME" ]; then
+          echo "❌ ZIP file not found: $ZIP_FILE_NAME"
+          exit 1
+        fi
+
+        aws s3 cp "$ZIP_FILE_NAME" "s3://${{ inputs.s3_layer_bucket_name }}/$S3_KEY" --no-progress && echo "✅ ZIP uploaded successfully" || (echo "❌ ZIP upload failed" && exit 1)
+
+        echo "🔹 Uploading hash to S3..."
+        echo "$CURRENT_HASH" | aws s3 cp - "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash" --no-progress && echo "✅ Hash uploaded successfully" || (echo "❌ Hash upload failed" && exit 1)
+
+        echo "🔹 Upload complete."
