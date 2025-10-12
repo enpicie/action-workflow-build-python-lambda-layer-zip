@@ -142,7 +142,7 @@ runs:
         cd layer && zip -r "../$ZIP_FILE_NAME" python && cd ..
         echo "✅ Created ZIP: $(du -h "$ZIP_FILE_NAME")"
 
-        - name: Upload ZIP and hash to S3
+    - name: Upload ZIP and hash to S3
       if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
