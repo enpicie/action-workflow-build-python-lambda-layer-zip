@@ -49,14 +49,12 @@ runs:
       run: |
         runtime_sanitized=$(echo "${{ inputs.python_runtime }}" | tr -d '.')
         zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
-        s3_prefix="applayers/${{ inputs.app_name }}-${runtime_sanitized}"
-        s3_key="${s3_prefix}.zip"
-
         echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
-        echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_OUTPUT
+        echo "zip_file_name=$zip_file" >> $GITHUB_OUTPUT
+
+        s3_key="applayers/$zip_file"
         echo "S3_KEY=$s3_key" >> $GITHUB_ENV
-        echo "S3_KEY=$s3_key" >> $GITHUB_OUTPUT
-        echo "S3_PREFIX=$s3_prefix" >> $GITHUB_ENV
+        echo "s3_artifact_key=$s3_key" >> $GITHUB_OUTPUT
 
     - name: Compute current requirements hash
       id: compute-hash
