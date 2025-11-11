@@ -1,5 +1,5 @@
 name: 'Build Lambda Layer Zip and Upload to S3'
-description: 'Installs dependencies from requirements.txt, zips for Lambda Layer, and uploads to S3 if requirements changed.'
+description: 'Builds Lambda layer ZIP from requirements.txt, hashes the artifact, and uploads to S3 only if the artifact hash differs.'
 
 inputs:
   requirements_path:
@@ -30,6 +30,9 @@ outputs:
   s3_artifact_key:
     description: 'Full S3 key for the uploaded ZIP artifact'
     value: ${{ steps.set-zip-and-s3.outputs.s3_artifact_key }}
+  s3_artifact_hash_key:
+    description: "Full S3 key for the uploaded artifact's hash file"
+    value: ${{ steps.set-zip-and-s3.outputs.s3_artifact_hash_key }}
 
 runs:
   using: 'composite'
@@ -37,7 +40,7 @@ runs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Configure AWS credentials (OIDC + role assumption)
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ inputs.aws_role_arn }}
@@ -61,56 +64,13 @@ runs:
         echo "ZIP_FILE_NAME=$zip_file" >> $GITHUB_ENV
         echo "S3_PREFIX=$s3_prefix" >> $GITHUB_ENV
         echo "S3_KEY=$s3_key" >> $GITHUB_ENV
+        echo "S3_HASH_KEY=$s3_hash_key" >> $GITHUB_ENV
 
         echo "zip_file_name=$zip_file" >> $GITHUB_OUTPUT
         echo "s3_artifact_key=$s3_key" >> $GITHUB_OUTPUT
-
-    - name: Compute current requirements hash
-      id: compute-hash
-      shell: bash
-      run: |
-        echo "🔹 Computing hash for: ${{ inputs.requirements_path }}"
-        if [ ! -f "${{ inputs.requirements_path }}" ]; then
-          echo "❌ Error: requirements.txt not found at path '${{ inputs.requirements_path }}'"
-          exit 1
-        fi
-        current_hash=$(sha256sum "${{ inputs.requirements_path }}" | cut -d ' ' -f1)
-        echo "🔹 Current hash: $current_hash"
-        echo "CURRENT_HASH=$current_hash" >> $GITHUB_ENV
-
-    - name: Fetch previous hash from S3 (if any)
-      id: fetch-prev-hash
-      continue-on-error: true
-      shell: bash
-      run: |
-        echo "🔹 Checking for previous hash at s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash"
-        aws s3 cp "s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash" prev.hash && echo "✅ Previous hash downloaded" || echo "⚠️ No previous hash found (first run or missing file)"
-        if [ -f prev.hash ]; then
-          echo "PREV_HASH=$(cat prev.hash)" >> $GITHUB_ENV
-          echo "🔹 Previous hash: $(cat prev.hash)"
-        else
-          echo "PREV_HASH=none" >> $GITHUB_ENV
-          echo "🔹 Setting PREV_HASH=none"
-        fi
-
-    - name: Determine if rebuild is needed
-      id: check-hash
-      shell: bash
-      run: |
-        echo "🔹 Comparing hashes..."
-        echo "Previous hash: $PREV_HASH"
-        echo "Current hash:  $CURRENT_HASH"
-
-        if [ "$CURRENT_HASH" != "$PREV_HASH" ]; then
-          echo "✅ Requirements changed — will rebuild layer."
-          echo "REQUIREMENTS_CHANGED=true" >> $GITHUB_ENV
-        else
-          echo "🟡 Requirements unchanged — skipping rebuild."
-          echo "REQUIREMENTS_CHANGED=false" >> $GITHUB_ENV
-        fi
+        echo "s3_artifact_hash_key=$s3_hash_key" >> $GITHUB_OUTPUT
 
     - name: Prepare build directory
-      if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
         echo "🔹 Preparing build directory..."
@@ -122,10 +82,9 @@ runs:
         cat filtered.txt
 
     - name: Install dependencies in Docker
-      if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
-        echo "🔹 Installing dependencies using Python ${{ inputs.python_runtime }}..."
+        echo "🔹 Installing dependencies for Python ${{ inputs.python_runtime }}..."
         docker run --rm \
           -v "$PWD":/app -w /app \
           --user $(id -u):$(id -g) \
@@ -135,32 +94,66 @@ runs:
         ls -1 layer/python | head -20 || echo "⚠️ No packages found in layer/python"
 
     - name: Zip dependencies
-      if: env.REQUIREMENTS_CHANGED == 'true'
       shell: bash
       run: |
-        echo "🔹 Zipping dependencies into $ZIP_FILE_NAME..."
-        cd layer && zip -r "../$ZIP_FILE_NAME" python && cd ..
+        echo "🔹 Silently zipping dependencies into $ZIP_FILE_NAME..."
+        cd layer && zip -r "../$ZIP_FILE_NAME" python > /dev/null && cd ..
         echo "✅ Created ZIP: $(du -h "$ZIP_FILE_NAME")"
 
-    - name: Upload ZIP and hash to S3
-      if: env.REQUIREMENTS_CHANGED == 'true'
+    - name: Compute artifact hash
+      id: compute-zip-hash
       shell: bash
       run: |
-        echo "🔹 Uploading layer ZIP to S3..."
-        if [ ! -f "$ZIP_FILE_NAME" ]; then
-          echo "❌ ZIP file not found: $ZIP_FILE_NAME"
-          exit 1
+        echo "🔹 Computing base64-encoded SHA256 for $ZIP_FILE_NAME..."
+        artifact_hash=$(sha256sum "$ZIP_FILE_NAME" | cut -d ' ' -f1 | xxd -r -p | base64 | tr -d '\n')
+        echo "🔹 Artifact hash: $artifact_hash"
+        echo "ARTIFACT_HASH=$artifact_hash" >> $GITHUB_ENV
+        echo "artifact_hash=$artifact_hash" >> $GITHUB_OUTPUT
+
+    - name: Fetch previous artifact hash from S3 (if any)
+      id: fetch-prev-hash
+      continue-on-error: true
+      shell: bash
+      run: |
+        HASH_S3_URI="s3://${{ inputs.s3_layer_bucket_name }}/${S3_HASH_KEY}"
+        echo "🔹 Checking for previous hash at $HASH_S3_URI"
+        aws s3 cp "$HASH_S3_URI" prev.hash && echo "✅ Previous hash downloaded" || echo "⚠️ No previous hash found (first run or missing file)"
+        if [ -f prev.hash ]; then
+          prev_hash=$(cat prev.hash | tr -d '\n\r')
+          echo "PREV_HASH=$prev_hash" >> $GITHUB_ENV
+          echo "🔹 Previous hash: $prev_hash"
+        else
+          echo "PREV_HASH=none" >> $GITHUB_ENV
+          echo "🔹 Setting PREV_HASH=none"
         fi
 
+    - name: Compare artifact hashes
+      id: check-hash
+      shell: bash
+      run: |
+        echo "🔹 Comparing hashes..."
+        echo "Previous hash: $PREV_HASH"
+        echo "Current hash:  $ARTIFACT_HASH"
+
+        if [ "$ARTIFACT_HASH" != "$PREV_HASH" ]; then
+          echo "✅ Artifact changed — will upload new version."
+          echo "ARTIFACT_CHANGED=true" >> $GITHUB_ENV
+        else
+          echo "🟡 Artifact unchanged — skipping upload."
+          echo "ARTIFACT_CHANGED=false" >> $GITHUB_ENV
+        fi
+
+    - name: Upload new artifact and hash to S3
+      if: env.ARTIFACT_CHANGED == 'true'
+      shell: bash
+      run: |
         ZIP_S3_URI="s3://${{ inputs.s3_layer_bucket_name }}/$S3_KEY"
+        HASH_S3_URI="s3://${{ inputs.s3_layer_bucket_name }}/${S3_HASH_KEY}"
+
+        echo "🔹 Uploading ZIP to $ZIP_S3_URI..."
         aws s3 cp "$ZIP_FILE_NAME" "$ZIP_S3_URI" --no-progress \
-          && echo "✅ ZIP uploaded successfully to $ZIP_S3_URI" \
-          || (echo "❌ ZIP upload failed to $ZIP_S3_URI" && exit 1)
+          && echo "✅ ZIP uploaded successfully."
 
-        echo "🔹 Uploading requirements hash to S3..."
-        HASH_S3_URI="s3://${{ inputs.s3_layer_bucket_name }}/${S3_PREFIX}.hash"
-        echo "$CURRENT_HASH" | aws s3 cp - "$HASH_S3_URI" --no-progress \
-          && echo "✅ Hash uploaded successfully to $HASH_S3_URI" \
-          || (echo "❌ Hash upload failed to $HASH_S3_URI" && exit 1)
-
-        echo "🔹 Upload complete."
+        echo "🔹 Uploading hash to $HASH_S3_URI..."
+        echo "$ARTIFACT_HASH" | aws s3 cp - "$HASH_S3_URI" --no-progress \
+          && echo "✅ Hash uploaded successfully."
