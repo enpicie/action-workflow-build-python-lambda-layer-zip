@@ -159,5 +159,5 @@ runs:
           && echo "✅ ZIP uploaded successfully."
 
         echo "🔹 Uploading hash to $HASH_S3_URI..."
-        echo -n "$ARTIFACT_HASH" | aws s3 cp - "$HASH_S3_URI" --no-progress \
+        echo -n "$ARTIFACT_HASH" | aws s3 cp - "$HASH_S3_URI" --no-progress --content-type "text/plain" \
           && echo "✅ Hash uploaded successfully."
