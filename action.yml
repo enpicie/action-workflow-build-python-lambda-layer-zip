@@ -54,6 +54,7 @@ runs:
         zip_file="${{ inputs.app_name }}-${runtime_sanitized}.zip"
         s3_prefix="applayers/${{ inputs.app_name }}-${runtime_sanitized}"
         s3_key="${s3_prefix}.zip"
+        s3_hash_key="${s3_prefix}.hash"
 
         echo "🔹 Python runtime: ${{ inputs.python_runtime }}"
         echo "🔹 Sanitized runtime: $runtime_sanitized"
