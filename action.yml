@@ -70,6 +70,9 @@ runs:
         echo "s3_artifact_key=$s3_key" >> $GITHUB_OUTPUT
         echo "s3_artifact_hash_key=$s3_hash_key" >> $GITHUB_OUTPUT
 
+        echo "s3_artifact_key: $s3_key"
+        echo "s3_artifact_hash_key: $s3_hash_key"
+
     - name: Prepare build directory
       shell: bash
       run: |
